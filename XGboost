@@ -1,0 +1,379 @@
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.metrics import f1_score, precision_score, recall_score, accuracy_score, roc_auc_score
+from sklearn.preprocessing import LabelEncoder, label_binarize
+import xgboost as xgb
+
+df_train = pd.read_csv('train.csv')
+df_test = pd.read_csv('test.csv')
+binary_features = ['family_history_with_overweight', 'FAVC', 'SMOKE', 'SCC']
+categorical_features = ['Gender', 'CAEC', 'CALC', 'MTRANS']
+for feature in binary_features:
+    le = LabelEncoder()
+    df_train[feature] = le.fit_transform(df_train[feature])
+    df_test[feature] = le.transform(df_test[feature])  # Apply same transformation to test data
+df_train = pd.get_dummies(df_train, columns=categorical_features)
+df_test = pd.get_dummies(df_test, columns=categorical_features)
+df_test = df_test.reindex(columns=df_train.columns, fill_value=0)
+df_test = df_test.drop(columns=['NObeyesdad'])
+X_train = df_train.drop(columns=['NObeyesdad'])
+y_train = df_train['NObeyesdad']
+label_encoder = LabelEncoder()
+y_encoded = label_encoder.fit_transform(y_train)
+classes = np.unique(y_encoded)
+X_train, X_val, y_train, y_val = train_test_split(X_train, y_encoded, test_size=0.2, stratify=y_encoded, random_state=42)
+param_grid = {
+    'learning_rate': [ 0.05, 0.1],
+    'n_estimators': [ 200, 300],
+    'gamma': [0.5],
+    'reg_alpha': [ 0.2, 0.4],
+    'reg_lambda': [ 0.2, 0.4]
+}
+model = xgb.XGBClassifier(objective='multi:softprob', num_class=len(classes), use_label_encoder=False)
+grid_search = GridSearchCV(estimator=model, param_grid=param_grid, scoring='accuracy', n_jobs=-1, cv=3, verbose=3)
+grid_search.fit(X_train, y_train)
+best_model = grid_search.best_estimator_
+y_pred_val = best_model.predict(X_val)
+y_pred_proba_val = best_model.predict_proba(X_val)
+precision = precision_score(y_val, y_pred_val, average='macro')
+recall = recall_score(y_val, y_pred_val, average='macro')
+accuracy = accuracy_score(y_val, y_pred_val)
+y_val_binarized = label_binarize(y_val, classes=classes)
+roc_auc = roc_auc_score(y_val_binarized, y_pred_proba_val, multi_class='ovr', average='macro')
+print(f"Best Parameters: {grid_search.best_params_}")
+print(f"Precision: {precision}")
+print(f"Recall: {recall}")
+print(f"Accuracy: {accuracy}")
+print(f"ROC AUC: {roc_auc}")
+
+# Baseline TPR
+def calculate_tpr_fpr(y_true, y_pred, pos_label):
+    TP = FP = TN = FN = 0
+    for i in range(len(y_true)):
+        if y_true[i] == y_pred[i] == pos_label:
+            TP += 1
+        elif y_pred[i] == pos_label and y_true[i] != y_pred[i]:
+            FP += 1
+        elif y_true[i] != pos_label and y_pred[i] != y_true[i]:
+            FN += 1
+        elif y_true[i] != pos_label and y_pred[i] == y_true[i]:
+            TN += 1
+    TPR = TP / (TP + FN) if TP + FN else 0
+    FPR = FP / (FP + TN) if FP + TN else 0
+    return TPR, FPR
+pos_label = 1
+tpr, fpr = calculate_tpr_fpr(y_val, y_pred_val, pos_label)
+print(f"Baseline TPR: {tpr}, Baseline FPR: {fpr}")
+
+# Validation F1 score
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_curve, auc, confusion_matrix, ConfusionMatrixDisplay
+from itertools import cycle
+y_val_binarized = label_binarize(y_val, classes=classes)
+fpr = dict()
+tpr = dict()
+roc_auc = dict()
+n_classes = y_val_binarized.shape[1]
+for i in range(n_classes):
+    fpr[i], tpr[i], _ = roc_curve(y_val_binarized[:, i], y_pred_proba_val[:, i])
+    roc_auc[i] = auc(fpr[i], tpr[i])
+plt.figure()
+colors = cycle(['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink'])
+for i, color in zip(range(n_classes), colors):
+    plt.plot(fpr[i], tpr[i], color=color, lw=2,
+             label='ROC curve of class {0} (area = {1:0.2f})'.format(i, roc_auc[i]))
+plt.plot([0, 1], [0, 1], 'k--', lw=2)
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('Receiver Operating Characteristic to Multi-Class')
+plt.legend(loc="lower right")
+plt.show()
+cm = confusion_matrix(y_val, y_pred_val)
+cmd = ConfusionMatrixDisplay(cm, display_labels=np.unique(label_encoder.inverse_transform(classes)))
+cmd.plot()
+plt.show()
+test_f1 = f1_score(y_val, y_pred_val, average='macro')
+print(f"Validation F1 score: {test_f1}")
+
+# Optimization Using Python(data preprocessing)
+import time
+start_time = time.time()
+df_train = pd.read_csv('train.csv')
+df_test = pd.read_csv('test.csv')
+binary_features = ['family_history_with_overweight', 'FAVC', 'SMOKE', 'SCC']
+categorical_features = ['Gender', 'CAEC', 'CALC', 'MTRANS']
+for feature in binary_features:
+    le = LabelEncoder()
+    df_train[feature] = le.fit_transform(df_train[feature])
+    df_test[feature] = le.transform(df_test[feature])
+df_train = pd.get_dummies(df_train, columns=categorical_features)
+df_test = pd.get_dummies(df_test, columns=categorical_features)
+end_time = time.time()
+baseline_time = end_time - start_time
+print(f"Baseline data preprocessing time: {baseline_time:.4f} seconds")
+
+# Optimized
+start_time = time.time()
+df_train = pd.read_csv('train.csv')
+df_test = pd.read_csv('test.csv')
+for feature in binary_features + categorical_features:
+    df_train[feature] = df_train[feature].astype('category')
+    df_test[feature] = df_test[feature].astype('category')
+for feature in binary_features:
+    df_train[feature] = df_train[feature].cat.codes
+    df_test[feature] = df_test[feature].cat.codes
+df_train = pd.get_dummies(df_train, columns=categorical_features)
+df_test = pd.get_dummies(df_test, columns=categorical_features)
+end_time = time.time()
+optimized_time = end_time - start_time
+print(f"Optimized data preprocessing time: {optimized_time:.4f} seconds")
+
+# Optimization using numba (TPR and FPR calculation)
+import time
+def calculate_tpr_fpr(y_true, y_pred, pos_label):
+    TP = FP = TN = FN = 0
+    for i in range(len(y_true)):
+        if y_true[i] == y_pred[i] == pos_label:
+            TP += 1
+        elif y_pred[i] == pos_label and y_true[i] != y_pred[i]:
+            FP += 1
+        elif y_true[i] != pos_label and y_pred[i] != y_true[i]:
+            FN += 1
+        elif y_true[i] != pos_label and y_pred[i] == y_true[i]:
+            TN += 1
+    TPR = TP / (TP + FN) if TP + FN else 0
+    FPR = FP / (FP + TN) if FP + TN else 0
+    return TPR, FPR
+start_time = time.time()
+pos_label = 1
+tpr, fpr = calculate_tpr_fpr(y_val, y_pred_val, pos_label)
+end_time = time.time()
+baseline_time = end_time - start_time
+print(f"Baseline execution time: {baseline_time:.6f} seconds")
+
+# Numba execution
+from numba import jit
+import numpy as np
+import time
+@jit(nopython=True)
+def calculate_tpr_fpr_numba(y_true, y_pred, pos_label):
+    TP = FP = TN = FN = 0
+    for i in range(len(y_true)):
+        if y_true[i] == y_pred[i] == pos_label:
+            TP += 1
+        elif y_pred[i] == pos_label and y_true[i] != y_pred[i]:
+            FP += 1
+        elif y_true[i] != pos_label and y_pred[i] != y_true[i]:
+            FN += 1
+        elif y_true[i] != pos_label and y_pred[i] == y_true[i]:
+            TN += 1
+    TPR = TP / (TP + FN) if TP + FN else 0
+    FPR = FP / (FP + TN) if FP + TN else 0
+    return TPR, FPR
+calculate_tpr_fpr_numba(np.array([1]), np.array([1]), 1)
+start_time = time.time()
+tpr_numba, fpr_numba = calculate_tpr_fpr_numba(y_val, y_pred_val, pos_label)
+end_time = time.time()
+numba_time = end_time - start_time
+print(f"Numba execution time after warm-up: {numba_time:.6f} seconds")
+
+# Optimization using parallel processing(gridsearch)
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import LabelEncoder
+import xgboost as xgb
+import time
+df_train = pd.read_csv('train.csv')
+df_test = pd.read_csv('test.csv')
+binary_features = ['family_history_with_overweight', 'FAVC', 'SMOKE', 'SCC']
+categorical_features = ['Gender', 'CAEC', 'CALC', 'MTRANS']
+for feature in binary_features + categorical_features:
+    df_train[feature] = df_train[feature].astype('category')
+    df_test[feature] = df_test[feature].astype('category')
+for feature in binary_features:
+    df_train[feature] = df_train[feature].cat.codes
+    df_test[feature] = df_test[feature].cat.codes
+df_train = pd.get_dummies(df_train, columns=categorical_features)
+df_test = pd.get_dummies(df_test, columns=categorical_features)
+X_train = df_train.drop(columns=['NObeyesdad'])
+y_train = df_train['NObeyesdad']
+label_encoder = LabelEncoder()
+y_encoded = label_encoder.fit_transform(y_train)
+classes = np.unique(y_encoded)
+X_train, X_val, y_train, y_val = train_test_split(X_train, y_encoded, test_size=0.2, stratify=y_encoded, random_state=42)
+param_grid = {
+    'learning_rate': [ 0.05, 0.1],
+    'n_estimators': [ 200, 300],
+    'gamma': [0.5],
+    'reg_alpha': [ 0.2, 0.4],
+    'reg_lambda': [ 0.2, 0.4]
+}
+model = xgb.XGBClassifier(objective='multi:softprob', num_class=len(classes), use_label_encoder=False)
+start_time = time.time()
+grid_search = GridSearchCV(estimator=model, param_grid=param_grid, scoring='accuracy', n_jobs=1, cv=3, verbose=3, return_train_score=True)
+grid_search.fit(X_train, y_train)
+cv_results = grid_search.cv_results_
+for i in range(len(cv_results['params'])):
+    print(f"Params: {cv_results['params'][i]}")
+    print(f"Mean Training Accuracy: {cv_results['mean_train_score'][i]:.4f}")
+    print(f"Mean Validation Accuracy: {cv_results['mean_test_score'][i]:.4f}")
+baseline_time = time.time() - start_time
+print(f"Baseline Grid Search Time: {baseline_time:.2f} seconds")
+best_model_baseline = grid_search.best_estimator_
+y_pred_val_baseline = best_model_baseline.predict(X_val)
+accuracy_baseline = accuracy_score(y_val, y_pred_val_baseline)
+print(f"Baseline Accuracy: {accuracy_baseline:.4f}")
+
+# Optimized
+start_time = time.time()
+grid_search_parallel = GridSearchCV(estimator=model, param_grid=param_grid, scoring='accuracy', n_jobs=-1, cv=3, verbose=3, return_train_score=True)
+grid_search_parallel.fit(X_train, y_train)
+cv_results = grid_search_parallel.cv_results_
+for i in range(len(cv_results['params'])):
+    print(f"Params: {cv_results['params'][i]}")
+    print(f"Mean Training Accuracy: {cv_results['mean_train_score'][i]:.4f}")
+    print(f"Mean Validation Accuracy: {cv_results['mean_test_score'][i]:.4f}")
+optimized_time = time.time() - start_time
+print(f"Optimized Grid Search Time: {optimized_time:.2f} seconds")
+best_model_optimized = grid_search_parallel.best_estimator_
+y_pred_val_optimized = best_model_optimized.predict(X_val)
+accuracy_optimized = accuracy_score(y_val, y_pred_val_optimized)
+print(f"Optimized Accuracy: {accuracy_optimized:.4f}")
+
+# Comparing everything together:
+
+# Pre-optimization:
+import pandas as pd
+import numpy as np
+import time
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import LabelEncoder, label_binarize
+from sklearn.metrics import accuracy_score, roc_curve, auc, confusion_matrix, ConfusionMatrixDisplay
+from sklearn.preprocessing import label_binarize
+import xgboost as xgb
+import matplotlib.pyplot as plt
+start_time = time.time()
+df_train = pd.read_csv('train.csv')
+df_test = pd.read_csv('test.csv')
+binary_features = ['family_history_with_overweight', 'FAVC', 'SMOKE', 'SCC']
+categorical_features = ['Gender', 'CAEC', 'CALC', 'MTRANS']
+for feature in binary_features:
+    le = LabelEncoder()
+    df_train[feature] = le.fit_transform(df_train[feature])
+    df_test[feature] = le.transform(df_test[feature])
+df_train = pd.get_dummies(df_train, columns=categorical_features)
+df_test = pd.get_dummies(df_test, columns=categorical_features)
+df_test = df_test.reindex(columns=df_train.columns, fill_value=0)
+df_test = df_test.drop(columns=['NObeyesdad'])
+X_train = df_train.drop(columns=['NObeyesdad'])
+y_train = df_train['NObeyesdad']
+label_encoder = LabelEncoder()
+y_encoded = label_encoder.fit_transform(y_train)
+X_train, X_val, y_train, y_val = train_test_split(X_train, y_encoded, test_size=0.2, stratify=y_encoded)
+model = xgb.XGBClassifier(objective='multi:softprob', num_class=len(np.unique(y_encoded)), use_label_encoder=False)
+param_grid = {
+    'learning_rate': [ 0.05, 0.1],
+    'n_estimators': [ 200, 300],
+    'gamma': [0.5],
+    'reg_alpha': [ 0.2, 0.4],
+    'reg_lambda': [ 0.2, 0.4]
+}
+grid_search = GridSearchCV(estimator=model, param_grid=param_grid, scoring='accuracy', n_jobs=1, cv=3, verbose=3, return_train_score=True)
+grid_search.fit(X_train, y_train)
+cv_results = grid_search.cv_results_
+for i in range(len(cv_results['params'])):
+    print(f"Params: {cv_results['params'][i]}")
+    print(f"Mean Training Accuracy: {cv_results['mean_train_score'][i]:.4f}")
+    print(f"Mean Validation Accuracy: {cv_results['mean_test_score'][i]:.4f}")
+def calculate_tpr_fpr(y_true, y_pred, pos_label):
+    TP = FP = TN = FN = 0
+    for i in range(len(y_true)):
+        if y_true[i] == y_pred[i] == pos_label:
+            TP += 1
+        elif y_pred[i] == pos_label and y_true[i] != y_pred[i]:
+            FP += 1
+        elif y_true[i] != pos_label and y_pred[i] != y_true[i]:
+            FN += 1
+        elif y_true[i] != pos_label and y_pred[i] == y_true[i]:
+            TN += 1
+    TPR = TP / (TP + FN) if TP + FN else 0
+    FPR = FP / (FP + TN) if FP + TN else 0
+    return TPR, FPR
+y_pred_val = grid_search.best_estimator_.predict(X_val)
+pos_label = 1  # Adjust based on your class labels
+tpr, fpr = calculate_tpr_fpr(y_val, y_pred_val, pos_label)
+end_time = time.time()
+print(f"Total Time: {end_time - start_time:.2f} seconds")
+
+# After optimization:
+from numba import jit
+import pandas as pd
+import numpy as np
+import time
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.metrics import accuracy_score, roc_curve, auc, confusion_matrix, ConfusionMatrixDisplay
+from sklearn.preprocessing import LabelEncoder, label_binarize
+import xgboost as xgb
+import matplotlib.pyplot as plt
+start_time1 = time.time()
+df_train = pd.read_csv('train.csv')
+df_test = pd.read_csv('test.csv')
+binary_features = ['family_history_with_overweight', 'FAVC', 'SMOKE', 'SCC']
+categorical_features = ['Gender', 'CAEC', 'CALC', 'MTRANS']
+for feature in binary_features + categorical_features:
+    df_train[feature] = df_train[feature].astype('category')
+    df_test[feature] = df_test[feature].astype('category')
+for feature in binary_features:
+    df_train[feature] = df_train[feature].cat.codes
+    df_test[feature] = df_test[feature].cat.codes
+df_train = pd.get_dummies(df_train, columns=categorical_features)
+df_test = pd.get_dummies(df_test, columns=categorical_features)
+df_test = df_test.reindex(columns=df_train.columns, fill_value=0)
+df_test = df_test.drop(columns=['NObeyesdad'])
+X_train = df_train.drop(columns=['NObeyesdad'])
+y_train = df_train['NObeyesdad']
+label_encoder = LabelEncoder()
+y_encoded = label_encoder.fit_transform(y_train)
+classes = np.unique(y_encoded)
+X_train, X_val, y_train, y_val = train_test_split(X_train, y_encoded, test_size=0.2, stratify=y_encoded)
+model = xgb.XGBClassifier(objective='multi:softprob', num_class=len(classes), use_label_encoder=False)
+param_grid = {
+    'learning_rate': [ 0.05, 0.1],
+    'n_estimators': [ 200, 300],
+    'gamma': [0.5],
+    'reg_alpha': [ 0.2, 0.4],
+    'reg_lambda': [ 0.2, 0.4]
+}
+grid_search = GridSearchCV(estimator=model, param_grid=param_grid, scoring='accuracy', n_jobs=-1, cv=3, verbose=3, return_train_score=True)
+grid_search.fit(X_train, y_train)
+cv_results = grid_search.cv_results_
+for i in range(len(cv_results['params'])):
+    print(f"Params: {cv_results['params'][i]}")
+    print(f"Mean Training Accuracy: {cv_results['mean_train_score'][i]:.4f}")
+    print(f"Mean Validation Accuracy: {cv_results['mean_test_score'][i]:.4f}")
+@jit(nopython=True)
+def calculate_tpr_fpr_numba(y_true, y_pred, pos_label):
+    TP = FP = TN = FN = 0
+    for i in range(len(y_true)):
+        if y_true[i] == y_pred[i] == pos_label:
+            TP += 1
+        elif y_pred[i] == pos_label and y_true[i] != y_pred[i]:
+            FP += 1
+        elif y_true[i] != pos_label and y_pred[i] != y_true[i]:
+            FN += 1
+        elif y_true[i] != pos_label and y_pred[i] == y_true[i]:
+            TN += 1
+    TPR = TP / (TP + FN) if TP + FN else 0
+    FPR = FP / (FP + TN) if FP + TN else 0
+    return TPR, FPR
+calculate_tpr_fpr_numba(np.array([1]), np.array([1]), 1)
+y_pred_val = grid_search.best_estimator_.predict(X_val)
+pos_label = 1  # Adjust based on your class labels
+tpr_numba, fpr_numba = calculate_tpr_fpr_numba(y_val, y_pred_val, pos_label)
+end_time1 = time.time()
+print(f"Total Time: {end_time1 - start_time1:.2f} seconds")
+
